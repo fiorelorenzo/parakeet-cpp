@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS: Metal backend is auto-enabled by build.rs on target_os=macos.
+          - os: macos-latest
+            features: ""
+          # Linux + Windows: GPU support via the Vulkan backend (ggml-vulkan).
+          # Compile-only here (GPU-less runners) — shaders are compiled to SPIR-V
+          # via glslc at build time; no VkInstance is created.
+          - os: ubuntu-latest
+            features: "--features vulkan"
+          - os: windows-latest
+            features: "--features vulkan"
+    env:
+      # Pin a known-good LunarG SDK version for Windows (see llama.cpp CI).
+      VULKAN_VERSION: "1.4.313.2"
+    steps:
+      - name: Checkout (with vendored parakeet.cpp + ggml submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ggml-vulkan's CMake requires: the Vulkan loader+headers (find_package
+      # Vulkan), the `glslc` SPIR-V compiler component, and SPIRV-Headers.
+      - name: Install Vulkan build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y glslc libvulkan-dev spirv-headers cmake ninja-build build-essential
+
+      - name: Install Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          curl.exe -o "$env:RUNNER_TEMP\VulkanSDK.exe" -L "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV  "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_VERSION\bin"
+
+      # rust-toolchain.toml pins the channel; rustup on the runner honors it.
+      - name: Cargo build (release)
+        run: cargo build --release -p parakeet-cpp ${{ matrix.features }}
+
+      # Non-gated tests (pure logic + ABI smoke). Model-dependent integration
+      # tests skip without PARAKEET_TEST_* env, so this is GPU-less safe.
+      - name: Cargo test
+        run: cargo test --release -p parakeet-cpp -p parakeet-cpp-sys ${{ matrix.features }}
