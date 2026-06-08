@@ -1,3 +1,7 @@
 /target
 *.gguf
 *.wav
+.DS_Store
+.vscode/
+.idea/
+*.swp
