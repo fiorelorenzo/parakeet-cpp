@@ -1,3 +1,7 @@
+use std::ffi::CStr;
+
+use parakeet_cpp_sys as sys;
+
 use crate::error::Error;
 use crate::model::Model;
 use crate::options::{TranscribeOptions, Transcript};
@@ -77,6 +81,97 @@ impl StreamSession for PseudoStreamSession<'_> {
             text: self.last_text,
             words: Vec::new(),
         })
+    }
+}
+
+/// Real cache-aware streaming. Borrows the Model so it can read last_error from
+/// the same ctx. `feed` pushes only the new tail; returns newly-finalized text.
+pub struct RealStreamSession<'a> {
+    model: &'a mut Model,
+    stream: *mut sys::parakeet_stream,
+    cumulative: String,
+}
+
+impl<'a> RealStreamSession<'a> {
+    pub(crate) fn begin(model: &'a mut Model, lang: Option<&str>) -> Result<Self, Error> {
+        let raw = match lang {
+            Some(l) => {
+                let c =
+                    std::ffi::CString::new(l).map_err(|_| Error::Transcribe("lang NUL".into()))?;
+                unsafe { sys::parakeet_capi_stream_begin_lang(model.ctx, c.as_ptr()) }
+            }
+            None => unsafe { sys::parakeet_capi_stream_begin(model.ctx) },
+        };
+        if raw.is_null() {
+            return Err(Error::NotStreaming);
+        }
+        Ok(Self {
+            model,
+            stream: raw,
+            cumulative: String::new(),
+        })
+    }
+}
+
+impl StreamSession for RealStreamSession<'_> {
+    fn feed(&mut self, pcm: &[f32]) -> Result<Partial, Error> {
+        let n =
+            i32::try_from(pcm.len()).map_err(|_| Error::Transcribe("too many samples".into()))?;
+        let mut eou_out: std::os::raw::c_int = 0;
+        // Returns "" (empty, non-null) when nothing newly finalized; NULL on error.
+        let raw =
+            unsafe { sys::parakeet_capi_stream_feed(self.stream, pcm.as_ptr(), n, &mut eou_out) };
+        if raw.is_null() {
+            return Err(Error::Transcribe(self.model.last_error()));
+        }
+        // SAFETY: raw is a malloc'd NUL-terminated string. We materialize a Rust
+        // String before freeing so no borrow outlives the allocation. free_string
+        // runs on every path (success and UTF-8 error) exactly once.
+        let delta_result = unsafe { CStr::from_ptr(raw) }.to_str().map(str::to_owned);
+        unsafe { sys::parakeet_capi_free_string(raw) };
+        let delta = delta_result.map_err(|_| Error::Utf8)?;
+        if !delta.is_empty() {
+            if !self.cumulative.is_empty() && !self.cumulative.ends_with(' ') {
+                self.cumulative.push(' ');
+            }
+            self.cumulative.push_str(delta.trim());
+        }
+        Ok(Partial {
+            text: self.cumulative.clone(),
+            delta,
+            eou: eou_out != 0,
+            is_final: false,
+        })
+    }
+
+    fn finish(mut self: Box<Self>) -> Result<Transcript, Error> {
+        let raw = unsafe { sys::parakeet_capi_stream_finalize(self.stream) };
+        if raw.is_null() {
+            return Err(Error::Transcribe(self.model.last_error()));
+        }
+        // SAFETY: same as feed — materialize before free, free exactly once.
+        let tail_result = unsafe { CStr::from_ptr(raw) }.to_str().map(str::to_owned);
+        unsafe { sys::parakeet_capi_free_string(raw) };
+        let tail = tail_result.map_err(|_| Error::Utf8)?;
+        if !tail.trim().is_empty() {
+            if !self.cumulative.is_empty() && !self.cumulative.ends_with(' ') {
+                self.cumulative.push(' ');
+            }
+            self.cumulative.push_str(tail.trim());
+        }
+        Ok(Transcript {
+            text: std::mem::take(&mut self.cumulative),
+            words: Vec::new(),
+        })
+    }
+}
+
+impl Drop for RealStreamSession<'_> {
+    fn drop(&mut self) {
+        if !self.stream.is_null() {
+            unsafe { sys::parakeet_capi_stream_free(self.stream) };
+            self.stream = std::ptr::null_mut();
+        }
     }
 }
 

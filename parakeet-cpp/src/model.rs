@@ -120,6 +120,16 @@ impl Model {
         crate::stream::PseudoStreamSession::new(self, sample_rate, opts)
     }
 
+    pub fn stream_real(
+        &mut self,
+        opts: &TranscribeOptions,
+    ) -> Result<crate::stream::RealStreamSession<'_>, Error> {
+        if !self.streaming {
+            return Err(Error::NotStreaming);
+        }
+        crate::stream::RealStreamSession::begin(self, opts.language.as_deref())
+    }
+
     pub(crate) fn last_error(&self) -> String {
         let p = unsafe { sys::parakeet_capi_last_error(self.ctx) };
         if p.is_null() {

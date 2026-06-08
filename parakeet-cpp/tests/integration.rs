@@ -66,3 +66,18 @@ fn pseudo_stream_accumulates() {
     let final_t = s.finish().expect("finish");
     assert!(!final_t.text.trim().is_empty());
 }
+
+#[test]
+fn stream_real_rejects_offline_model() {
+    let Ok(model_path) = std::env::var("PARAKEET_OFFLINE_MODEL") else {
+        eprintln!("skipping: set PARAKEET_OFFLINE_MODEL to a non-streaming gguf");
+        return;
+    };
+    let mut model = Model::load(Path::new(&model_path)).expect("load");
+    if !model.is_streaming() {
+        assert!(matches!(
+            model.stream_real(&TranscribeOptions::default()),
+            Err(parakeet_cpp::Error::NotStreaming)
+        ));
+    }
+}
