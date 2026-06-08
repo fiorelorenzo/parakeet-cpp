@@ -130,12 +130,12 @@ impl StreamSession for RealStreamSession<'_> {
         let delta_result = unsafe { CStr::from_ptr(raw) }.to_str().map(str::to_owned);
         unsafe { sys::parakeet_capi_free_string(raw) };
         let delta = delta_result.map_err(|_| Error::Utf8)?;
-        if !delta.is_empty() {
-            if !self.cumulative.is_empty() && !self.cumulative.ends_with(' ') {
-                self.cumulative.push(' ');
-            }
-            self.cumulative.push_str(delta.trim());
-        }
+        // Accumulate verbatim: the C API returns the exact newly-finalized byte
+        // range of the full detokenized text (via take_new_text()). Inter-word
+        // spaces are embedded as regular ' ' characters by detokenize(); sub-word
+        // continuations have no separator. Trimming or force-inserting spaces
+        // here would split words when the model finalizes sub-word fragments.
+        self.cumulative.push_str(&delta);
         Ok(Partial {
             text: self.cumulative.clone(),
             delta,
@@ -153,12 +153,9 @@ impl StreamSession for RealStreamSession<'_> {
         let tail_result = unsafe { CStr::from_ptr(raw) }.to_str().map(str::to_owned);
         unsafe { sys::parakeet_capi_free_string(raw) };
         let tail = tail_result.map_err(|_| Error::Utf8)?;
-        if !tail.trim().is_empty() {
-            if !self.cumulative.is_empty() && !self.cumulative.ends_with(' ') {
-                self.cumulative.push(' ');
-            }
-            self.cumulative.push_str(tail.trim());
-        }
+        // Accumulate verbatim for the same reason as feed: the finalize tail is
+        // the remaining substring of the full detokenized text.
+        self.cumulative.push_str(&tail);
         Ok(Transcript {
             text: std::mem::take(&mut self.cumulative),
             words: Vec::new(),
