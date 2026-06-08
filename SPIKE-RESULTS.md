@@ -28,6 +28,26 @@
 
 ---
 
+## Quantization trade-off (tdt-0.6b-v3, FLEURS `it_it`)
+
+All quantizations of `tdt-0.6b-v3` measured on the same 8-clip FLEURS Italian set. Peak resident set size (RSS) measured with `/usr/bin/time -l` on the release binary running a single offline transcribe.
+
+| Quant | File (MB) | Peak RSS (MB) | Mean WER | vs q8_0 |
+|---|---|---|---|---|
+| q8_0 | 897 | 1880 | 0.005 | baseline |
+| q6_k | 775 | 1636 | 0.010 | 2x (worse) |
+| q5_k | 707 | 1501 | 0.005 | identical |
+| q4_k | 644 | 1374 | 0.005 | identical |
+
+**Notes:**
+
+- `q5_k` matches `q8_0` accuracy exactly (same transcripts) while cutting peak RSS by roughly 20%, and is slightly faster — k-quants are memory-bandwidth bound on Apple Silicon, so smaller weights decode faster.
+- `q6_k` is strictly dominated by `q5_k`: it is larger and shows a 2x WER regression from a single spurious word insertion. More bits do not guarantee better quality with k-quants.
+- `q4_k` showed no degradation on this set (−27% RSS vs `q8_0`), but 8 clean read-speech clips is a narrow sample; validate on noisier, conversational speech before relying on it.
+- Recommended default: **`q5_k`**. `q4_k` is a reasonable low-RAM option.
+
+---
+
 ## Streaming and end-of-utterance (EOU) behaviour
 
 Tested on a 45.5-second concatenation of the 8 real FLEURS Italian clips run through `RealStreamSession` in 500 ms chunks.
