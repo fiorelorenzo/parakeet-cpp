@@ -10,7 +10,7 @@ cmake = "0.1"
 bindgen = "0.70"
 
 [features]
-default = ["metal"]
+default = []
 metal = []
 vulkan = []
 cuda = []

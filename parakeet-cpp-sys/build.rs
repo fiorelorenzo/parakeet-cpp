@@ -4,7 +4,10 @@ use std::process::Command;
 
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let upstream = manifest.join("../vendor/parakeet.cpp").canonicalize().unwrap();
+    let upstream = manifest
+        .join("../vendor/parakeet.cpp")
+        .canonicalize()
+        .expect("vendor/parakeet.cpp not found — run: git submodule update --init --recursive");
     let ggml = upstream.join("third_party/ggml");
 
     // --- Cross-platform, no-bash patch application (spec §5.2 / §13.6 option a) ---
@@ -13,12 +16,18 @@ fn main() {
         let mut patches: Vec<PathBuf> = std::fs::read_dir(&patches_dir)
             .unwrap()
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().map_or(false, |x| x == "patch"))
+            .filter(|p| p.extension().is_some_and(|x| x == "patch"))
             .collect();
         patches.sort();
         for p in patches {
             let already = Command::new("git")
-                .args(["-C", ggml.to_str().unwrap(), "apply", "--reverse", "--check"])
+                .args([
+                    "-C",
+                    ggml.to_str().unwrap(),
+                    "apply",
+                    "--reverse",
+                    "--check",
+                ])
                 .arg(&p)
                 .status()
                 .map(|s| s.success())
@@ -42,7 +51,7 @@ fn main() {
         .define("PARAKEET_BUILD_CLI", "OFF")
         .define("PARAKEET_BUILD_TESTS", "OFF");
 
-    if cfg!(feature = "metal") {
+    if cfg!(target_os = "macos") || cfg!(feature = "metal") {
         cfg.define("PARAKEET_GGML_METAL", "ON");
     }
     if cfg!(feature = "vulkan") {
@@ -57,15 +66,41 @@ fn main() {
 
     let dst = cfg.build();
 
-    println!("cargo:rustc-link-search=native={}/lib", dst.display());
-    println!("cargo:rustc-link-search=native={}/build", dst.display());
-    println!("cargo:rustc-link-lib=static=parakeet");
-    for lib in ["ggml", "ggml-base", "ggml-cpu", "ggml-metal", "ggml-blas"] {
-        println!("cargo:rustc-link-lib=static={lib}");
+    // Static libs to link, in dependency order (parakeet depends on ggml).
+    // Verified against vendor pin e270af7 (ggml e705c5fe). Revisit on submodule bump:
+    // ggml has split/renamed backend libs across versions.
+    let lib_dirs = [dst.join("lib"), dst.join("build")];
+    for dir in &lib_dirs {
+        println!("cargo:rustc-link-search=native={}", dir.display());
+    }
+    let candidates = [
+        "parakeet",
+        "ggml",
+        "ggml-base",
+        "ggml-cpu",
+        "ggml-metal",
+        "ggml-blas",
+        "ggml-vulkan",
+        "ggml-cuda",
+        "ggml-hip",
+    ];
+    for lib in candidates {
+        let exists = lib_dirs
+            .iter()
+            .any(|d| d.join(format!("lib{lib}.a")).exists());
+        if exists {
+            println!("cargo:rustc-link-lib=static={lib}");
+        }
     }
     println!("cargo:rustc-link-lib=c++");
     if cfg!(target_os = "macos") {
-        for fw in ["Metal", "MetalKit", "Foundation", "Accelerate", "CoreFoundation"] {
+        for fw in [
+            "Metal",
+            "MetalKit",
+            "Foundation",
+            "Accelerate",
+            "CoreFoundation",
+        ] {
             println!("cargo:rustc-link-lib=framework={fw}");
         }
     }
@@ -83,4 +118,6 @@ fn main() {
 
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../vendor/parakeet.cpp/include/parakeet_capi.h");
+    println!("cargo:rerun-if-changed=../vendor/parakeet.cpp/CMakeLists.txt");
 }
