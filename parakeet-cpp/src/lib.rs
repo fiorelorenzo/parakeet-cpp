@@ -1,1 +1,2 @@
-// High-level Rust bindings for parakeet.cpp (to be implemented).
+mod error;
+pub use error::Error;
