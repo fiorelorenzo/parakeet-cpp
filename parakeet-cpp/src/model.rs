@@ -112,6 +112,14 @@ impl Model {
         s.map_err(|_| Error::Utf8)
     }
 
+    pub fn stream_pseudo(
+        &mut self,
+        sample_rate: u32,
+        opts: TranscribeOptions,
+    ) -> crate::stream::PseudoStreamSession<'_> {
+        crate::stream::PseudoStreamSession::new(self, sample_rate, opts)
+    }
+
     pub(crate) fn last_error(&self) -> String {
         let p = unsafe { sys::parakeet_capi_last_error(self.ctx) };
         if p.is_null() {

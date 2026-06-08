@@ -1,4 +1,4 @@
-use parakeet_cpp::{Model, TranscribeOptions};
+use parakeet_cpp::{Model, StreamSession, TranscribeOptions};
 use std::path::Path;
 
 #[test]
@@ -42,4 +42,27 @@ fn transcribe_real_model() {
         .expect("transcribe");
     eprintln!("transcript: {}", t.text);
     assert!(!t.text.trim().is_empty(), "expected non-empty transcript");
+}
+
+#[test]
+fn pseudo_stream_accumulates() {
+    let (Ok(model_path), Ok(wav)) = (
+        std::env::var("PARAKEET_TEST_MODEL"),
+        std::env::var("PARAKEET_TEST_WAV"),
+    ) else {
+        eprintln!("skipping");
+        return;
+    };
+    let mut model = Model::load(Path::new(&model_path)).expect("load");
+    let pcm = load_wav_16k_mono(&wav);
+    let half = pcm.len() / 2;
+    let mut s = Box::new(model.stream_pseudo(16_000, TranscribeOptions::default()));
+    let p1 = s.feed(&pcm[..half]).expect("feed1");
+    let p2 = s.feed(&pcm[half..]).expect("feed2");
+    assert!(
+        p2.text.len() >= p1.text.len(),
+        "cumulative text should not shrink"
+    );
+    let final_t = s.finish().expect("finish");
+    assert!(!final_t.text.trim().is_empty());
 }
