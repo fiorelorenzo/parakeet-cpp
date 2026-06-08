@@ -55,6 +55,30 @@ cargo run --release --example spike -- stream ./models/nemotron-3.5-asr-streamin
 Expected offline output: `is_streaming = false` followed by a transcript of the spoken sentence.
 Expected streaming output: per-chunk feed log on stderr, then CRITERION 1 / CRITERION 3 summary lines on stdout.
 
+## Testing
+
+Most unit tests run without any model weights. A small set of integration tests
+are gated on environment variables and skip automatically when those variables
+are unset:
+
+| Test | Variables required |
+| ---- | ------------------ |
+| `transcribe_real_model` | `PARAKEET_TEST_MODEL` (path to a `.gguf`), `PARAKEET_TEST_WAV` (path to a 16 kHz mono WAV) |
+| `pseudo_stream_accumulates` | `PARAKEET_TEST_MODEL`, `PARAKEET_TEST_WAV` |
+| `stream_real_rejects_offline_model` | `PARAKEET_OFFLINE_MODEL` (path to a non-streaming `.gguf`) |
+
+Example:
+
+```sh
+PARAKEET_TEST_MODEL=./models/tdt-0.6b-v3-q8_0.gguf \
+PARAKEET_TEST_WAV=/tmp/smoke.wav \
+cargo test
+```
+
+Note: some streaming models (e.g. nemotron) embed language tags such as
+`<it-IT>` in the transcript and may prefix the first delta with a leading
+space. Stripping these is the consumer's responsibility.
+
 ## Pinned upstream
 
 `vendor/parakeet.cpp` is pinned to commit `e270af73b94c9a5c37ec516230219ed4580e1db6` (master, 2026-06-08).

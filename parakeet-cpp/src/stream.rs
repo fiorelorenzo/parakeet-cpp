@@ -7,6 +7,10 @@ use crate::model::Model;
 use crate::options::{TranscribeOptions, Transcript};
 
 /// One incremental update from a streaming session.
+///
+/// Note: some multilingual models (e.g. nemotron) embed language tags like
+/// `<it-IT>` in the text, and the first delta of an utterance may carry a
+/// leading space. Stripping these is the consumer's responsibility.
 #[derive(Debug, Clone, Default)]
 pub struct Partial {
     /// Full cumulative transcript so far (authoritative).
@@ -86,6 +90,9 @@ impl StreamSession for PseudoStreamSession<'_> {
 
 /// Real cache-aware streaming. Borrows the Model so it can read last_error from
 /// the same ctx. `feed` pushes only the new tail; returns newly-finalized text.
+///
+/// Deltas are SentencePiece-detokenized incremental text accumulated verbatim;
+/// inter-word spaces are embedded as regular `' '` characters by detokenize().
 pub struct RealStreamSession<'a> {
     model: &'a mut Model,
     stream: *mut sys::parakeet_stream,
@@ -145,6 +152,9 @@ impl StreamSession for RealStreamSession<'_> {
     }
 
     fn finish(mut self: Box<Self>) -> Result<Transcript, Error> {
+        // stream_finalize flushes the tail but does NOT free the stream;
+        // Drop (stream_free) owns the free. Do not null self.stream here or
+        // Drop would leak it.
         let raw = unsafe { sys::parakeet_capi_stream_finalize(self.stream) };
         if raw.is_null() {
             return Err(Error::Transcribe(self.model.last_error()));
@@ -165,6 +175,8 @@ impl StreamSession for RealStreamSession<'_> {
 
 impl Drop for RealStreamSession<'_> {
     fn drop(&mut self) {
+        // Frees the stream exactly once for both the finish() path and the
+        // drop-without-finish path.
         if !self.stream.is_null() {
             unsafe { sys::parakeet_capi_stream_free(self.stream) };
             self.stream = std::ptr::null_mut();
@@ -172,7 +184,12 @@ impl Drop for RealStreamSession<'_> {
     }
 }
 
-/// Longest common prefix length in bytes, snapped to a char boundary.
+/// Returns the longest common prefix length in bytes of `a` and `b`, snapped
+/// down to a char boundary valid in both strings.
+///
+/// Used internally to compute streaming delta diffs: after each decode, we
+/// advance the consumer's view by this many bytes rather than resetting from
+/// zero, so sub-word continuations are not split at multibyte boundaries.
 #[must_use]
 pub fn common_prefix_len(a: &str, b: &str) -> usize {
     let mut n = a

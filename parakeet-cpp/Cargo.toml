@@ -3,6 +3,9 @@ name = "parakeet-cpp"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
+description = "Safe Rust bindings for mudler/parakeet.cpp (ggml Parakeet/Nemotron ASR), with offline and streaming transcription"
+keywords = ["asr", "speech-to-text", "parakeet", "ggml", "ffi"]
+categories = ["multimedia::audio", "api-bindings"]
 
 [dependencies]
 parakeet-cpp-sys = { path = "../parakeet-cpp-sys" }
