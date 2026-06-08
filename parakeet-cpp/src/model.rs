@@ -15,8 +15,11 @@ pub struct Model {
     streaming: bool,
 }
 
-// The native ctx is single-threaded; transcribe takes &mut self so there is no
-// shared aliasing. Send is sound (ownership moves between threads); !Sync.
+// SAFETY: all mutable state is encapsulated in `ctx`; the C library is assumed
+// to keep no thread-local state tied to the calling thread (no errno-style
+// per-thread error buffers, no thread-affine handles). `transcribe` takes
+// `&mut self`, so calls are exclusive; moving ownership across threads is sound.
+// `*mut parakeet_ctx` keeps the type `!Sync`, preventing shared concurrent use.
 unsafe impl Send for Model {}
 
 impl Model {
@@ -32,12 +35,15 @@ impl Model {
             .map_err(|_| Error::Load("path contains NUL".into()))?;
         let ctx = unsafe { sys::parakeet_capi_load(c_path.as_ptr()) };
         if ctx.is_null() {
+            // parakeet_capi_last_error requires a live ctx; on load failure ctx is NULL
+            // and the C API exposes no global error slot, so we can only report the path.
             return Err(Error::Load(format!(
                 "parakeet_capi_load returned NULL for {}",
                 gguf_path.display()
             )));
         }
-        // A streaming model accepts stream_begin; probe and immediately free.
+        // Probe streaming support: stream_begin returns NULL for offline models.
+        // Assumes begin+immediate-free leaves the ctx unaffected for later transcribe.
         let probe = unsafe { sys::parakeet_capi_stream_begin(ctx) };
         let streaming = !probe.is_null();
         if !probe.is_null() {
@@ -60,7 +66,7 @@ impl Model {
         let n =
             i32::try_from(pcm.len()).map_err(|_| Error::Transcribe("too many samples".into()))?;
         let decoder = 0; // default (by arch)
-        #[allow(clippy::cast_possible_wrap)]
+        #[allow(clippy::cast_possible_wrap)] // sample rates are always < 2^31
         let sr = sample_rate as i32;
         let raw = match &opts.language {
             Some(lang) => {
@@ -94,7 +100,11 @@ impl Model {
         if raw.is_null() {
             return Err(Error::Transcribe(self.last_error()));
         }
-        // SAFETY: raw is a malloc'd NUL-terminated UTF-8 string owned by us.
+        // SAFETY: `raw` is a malloc'd NUL-terminated UTF-8 string returned by
+        // parakeet.cpp and owned by us. We fully materialize an owned String (or
+        // detect the UTF-8 error) BEFORE calling free_string, so no borrow outlives
+        // the allocation. free_string runs on every path (success and Utf8 error),
+        // exactly once; `raw` is never touched again afterward.
         let s = unsafe { CStr::from_ptr(raw) }
             .to_str()
             .map(|s| s.to_owned());

@@ -13,11 +13,14 @@ fn load_wav_16k_mono(path: &str) -> Vec<f32> {
     assert_eq!(spec.channels, 1, "fixture must be mono");
     assert_eq!(spec.sample_rate, 16_000, "fixture must be 16 kHz");
     match spec.sample_format {
-        hound::SampleFormat::Float => r.samples::<f32>().map(|s| s.unwrap()).collect(),
+        hound::SampleFormat::Float => r
+            .samples::<f32>()
+            .map(|s| s.expect("decode wav sample"))
+            .collect(),
         hound::SampleFormat::Int => {
             let max = (1i64 << (spec.bits_per_sample - 1)) as f32;
             r.samples::<i32>()
-                .map(|s| s.unwrap() as f32 / max)
+                .map(|s| s.expect("decode wav sample") as f32 / max)
                 .collect()
         }
     }

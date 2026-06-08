@@ -2,7 +2,8 @@
 pub struct TranscribeOptions {
     /// Target language code (e.g. "it", "en", "auto"). None = engine default.
     pub language: Option<String>,
-    /// Request per-word timestamps (uses the JSON C entry points). Off by default.
+    /// Reserved: request per-word timestamps. NOT yet implemented — `transcribe`
+    /// currently always returns an empty `words` vec regardless of this flag.
     pub word_timestamps: bool,
 }
 
