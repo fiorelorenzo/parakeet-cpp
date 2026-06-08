@@ -45,11 +45,15 @@ say -v Alice "Ciao, questo è un test del sistema di riconoscimento vocale Parak
   say "Hello, this is a test of the Parakeet speech recognition system." -o /tmp/smoke.aiff
 afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/smoke.aiff /tmp/smoke.wav
 
-# Run inference (Metal on Apple Silicon; first run JITs shaders — be patient)
-cargo run --release --example spike -- ./models/tdt-0.6b-v3-q8_0.gguf /tmp/smoke.wav it
+# Run offline inference (Metal on Apple Silicon; first run JITs shaders — be patient)
+cargo run --release --example spike -- offline ./models/tdt-0.6b-v3-q8_0.gguf /tmp/smoke.wav it
+
+# Run streaming inference (nemotron model required)
+cargo run --release --example spike -- stream ./models/nemotron-3.5-asr-streaming-0.6b-q5_k.gguf /tmp/smoke.wav it
 ```
 
-Expected output: `is_streaming = false` followed by a transcript of the spoken sentence.
+Expected offline output: `is_streaming = false` followed by a transcript of the spoken sentence.
+Expected streaming output: per-chunk feed log on stderr, then CRITERION 1 / CRITERION 3 summary lines on stdout.
 
 ## Pinned upstream
 
