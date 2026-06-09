@@ -50,6 +50,17 @@ jobs:
           Add-Content $env:GITHUB_ENV  "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_VERSION\bin"
 
+      # ggml-vulkan builds with the Ninja generator on Windows (see build.rs);
+      # Ninja needs an MSVC dev environment (cl.exe on PATH) + ninja itself.
+      - name: Setup MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Ninja (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ninja
+        shell: pwsh
+
       # rust-toolchain.toml pins the channel; rustup on the runner honors it.
       - name: Cargo build (release)
         run: cargo build --release -p parakeet-cpp ${{ matrix.features }}

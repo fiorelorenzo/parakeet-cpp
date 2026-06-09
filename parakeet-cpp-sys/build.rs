@@ -49,7 +49,11 @@ fn main() {
         .define("GGML_NATIVE", "OFF")
         .define("BUILD_SHARED_LIBS", "OFF")
         .define("PARAKEET_BUILD_CLI", "OFF")
-        .define("PARAKEET_BUILD_TESTS", "OFF");
+        .define("PARAKEET_BUILD_TESTS", "OFF")
+        // Use ggml's built-in threadpool for the CPU backend instead of OpenMP,
+        // so we don't have to link libgomp (Linux) / vcomp (Windows) into the
+        // Rust binary. CPU is a fallback here (GPU backends are primary).
+        .define("GGML_OPENMP", "OFF");
 
     if cfg!(target_os = "macos") || cfg!(feature = "metal") {
         cfg.define("PARAKEET_GGML_METAL", "ON");
@@ -62,6 +66,14 @@ fn main() {
     }
     if cfg!(feature = "hip") {
         cfg.define("PARAKEET_GGML_HIP", "ON");
+    }
+
+    // Windows: the Visual Studio (multi-config) generator fails ggml-vulkan's
+    // `vulkan-shaders-gen` ExternalProject sub-configure. Ninja (single-config)
+    // is the generator llama.cpp uses there. Requires `ninja` + an MSVC dev
+    // environment on PATH (the CI sets both up).
+    if cfg!(target_os = "windows") {
+        cfg.generator("Ninja");
     }
 
     let dst = cfg.build();
