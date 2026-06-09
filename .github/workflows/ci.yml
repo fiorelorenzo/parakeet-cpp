@@ -61,6 +61,14 @@ jobs:
         run: choco install ninja
         shell: pwsh
 
+      # Windows MAX_PATH (260): the deeply nested cargo target + ggml-vulkan
+      # ExternalProject + cmake TryCompile paths overflow it (C1041 "cannot open
+      # program database"). A short CARGO_TARGET_DIR keeps paths under the limit.
+      - name: Use a short target dir (Windows, avoid MAX_PATH)
+        if: runner.os == 'Windows'
+        run: echo "CARGO_TARGET_DIR=C:\b" >> $env:GITHUB_ENV
+        shell: pwsh
+
       # rust-toolchain.toml pins the channel; rustup on the runner honors it.
       - name: Cargo build (release)
         run: cargo build --release -p parakeet-cpp ${{ matrix.features }}
