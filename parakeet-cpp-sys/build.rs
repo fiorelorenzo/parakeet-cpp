@@ -97,7 +97,7 @@ fn main() {
     // backend MODULES land in `bin/`. The static build keeps everything as
     // `lib*.a` / `*.lib` across `lib/` + the build tree (+ `Release/` on the
     // Windows multi-config generators).
-    let lib_dirs = [
+    let mut lib_dirs = vec![
         dst.join("lib"),
         dst.join("bin"),
         dst.join("build"),
@@ -105,6 +105,20 @@ fn main() {
         dst.join("bin").join("Release"),
         dst.join("build").join("Release"),
     ];
+    // parakeet.cpp has NO install() rule, so the parakeet library (static `.lib`/
+    // `.a`, or — under DL — the SHARED `.dll`/.so/.dylib + its MSVC import `.lib`)
+    // is never copied to the install prefix; it only exists somewhere in the build
+    // tree. ggml redirects DLLs to `<build>/bin` via CMAKE_RUNTIME_OUTPUT_DIRECTORY
+    // (a directory-scoped var that does NOT propagate to the parent parakeet
+    // scope), and the Ninja vs multi-config generators differ on where the import
+    // `.lib` lands. Rather than enumerate every layout, walk the whole build tree
+    // and add every dir that holds a linkable artifact, so `parakeet.lib` (the DL
+    // import lib that the consumer exe links) is found regardless of generator.
+    for dir in find_link_dirs(&dst.join("build")) {
+        if !lib_dirs.contains(&dir) {
+            lib_dirs.push(dir);
+        }
+    }
     for dir in &lib_dirs {
         println!("cargo:rustc-link-search=native={}", dir.display());
     }
@@ -292,6 +306,40 @@ fn apply_patches(dir: &std::path::Path, root: &std::path::Path) {
             .expect("failed to spawn git apply");
         assert!(status.success(), "git apply failed for {}", p.display());
     }
+}
+
+/// Recursively collect every directory under `root` that contains at least one
+/// linkable artifact (`.lib` / `.a` / `.dll` / `.so` / `.dylib`). Used to find
+/// the parakeet library in the build tree (it has no install rule, and its exact
+/// location varies by generator/platform). Returns an empty vec if `root` is
+/// absent. Directories are returned deepest-first is NOT guaranteed; order is
+/// irrelevant for link-search.
+fn find_link_dirs(root: &std::path::Path) -> Vec<PathBuf> {
+    fn is_linkable(p: &std::path::Path) -> bool {
+        p.extension()
+            .and_then(|x| x.to_str())
+            .is_some_and(|x| matches!(x, "lib" | "a" | "dll" | "so" | "dylib"))
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut has_lib = false;
+        for e in entries.filter_map(Result::ok) {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if is_linkable(&p) {
+                has_lib = true;
+            }
+        }
+        if has_lib {
+            out.push(dir);
+        }
+    }
+    out
 }
 
 /// True if `dir` holds at least one dynamic library (`.dylib` / `.so` / `.dll`).
