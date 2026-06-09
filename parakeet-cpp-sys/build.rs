@@ -54,7 +54,11 @@ fn main() {
         // those live in the dlopen'd CPU module, not the link-time core, so the
         // shared parakeet/final binary link must defer them to runtime resolution
         // (the loaded CPU module exports them into the global table).
-        if cfg!(any(target_os = "macos", target_os = "linux")) {
+        // macOS (Apple ld) syntax only. On Linux, GNU ld leaves undefined symbols
+        // in a shared object to be resolved at load time by default, so no flag is
+        // needed — the RTLD_GLOBAL ggml patch exposes the dlopen'd CPU module's
+        // symbols at runtime. (`-undefined dynamic_lookup` is not valid GNU ld.)
+        if cfg!(target_os = "macos") {
             cfg.define("CMAKE_SHARED_LINKER_FLAGS", "-Wl,-undefined,dynamic_lookup");
         }
     } else {
