@@ -137,6 +137,14 @@ fn main() {
                 println!("cargo:rustc-link-arg=-Wl,-rpath,{}", dir.display());
             }
         }
+        // Linux: the consumer binary links libparakeet.so, which leaves the
+        // ggml-cpu symbols undefined (resolved at runtime from the dlopen'd CPU
+        // module via the RTLD_GLOBAL patch). GNU ld rejects undefined shared-lib
+        // symbols at exe-link time unless told to allow them. (macOS uses the
+        // cmake `-undefined dynamic_lookup` flag instead.)
+        if target_os == "linux" {
+            println!("cargo:rustc-link-arg=-Wl,--allow-shlib-undefined");
+        }
         // Export the dylib dirs as `links` metadata so dependents can re-emit the
         // rpath: `links = "parakeet"` maps `cargo:rpath=…` → `DEP_PARAKEET_RPATH`.
         let rpath = dylib_dirs
@@ -258,8 +266,18 @@ fn apply_patches(dir: &std::path::Path, root: &std::path::Path) {
     patches.sort();
     let root = root.to_str().unwrap();
     for p in patches {
+        // `--ignore-whitespace` makes apply EOL-robust: on Windows the source is
+        // often checked out CRLF while the patch context is LF, which otherwise
+        // fails with "patch does not apply".
         let already = Command::new("git")
-            .args(["-C", root, "apply", "--reverse", "--check"])
+            .args([
+                "-C",
+                root,
+                "apply",
+                "--reverse",
+                "--check",
+                "--ignore-whitespace",
+            ])
             .arg(&p)
             .status()
             .map(|s| s.success())
@@ -268,7 +286,7 @@ fn apply_patches(dir: &std::path::Path, root: &std::path::Path) {
             continue;
         }
         let status = Command::new("git")
-            .args(["-C", root, "apply"])
+            .args(["-C", root, "apply", "--ignore-whitespace"])
             .arg(&p)
             .status()
             .expect("failed to spawn git apply");

@@ -13,6 +13,12 @@ fn main() {
                 println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
             }
         }
+        // Linux DL: this crate's test/bin link units also link libparakeet.so,
+        // whose ggml-cpu symbols are undefined until the CPU module is loaded at
+        // runtime. Allow them at link time (mirrors the sys crate's flag).
+        if target_os == "linux" {
+            println!("cargo:rustc-link-arg=-Wl,--allow-shlib-undefined");
+        }
     }
     // Surface the sys crate's loadable-backend-modules dir to this crate's own
     // source/tests at compile time. cargo exposes the sys crate's `backends_dir`
