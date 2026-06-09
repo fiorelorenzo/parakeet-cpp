@@ -58,6 +58,97 @@ index b082455..de21cd2 100644
  #ifdef __cplusplus
  } // extern "C"
  #endif
+diff --git a/src/backend.cpp b/src/backend.cpp
+index 40055f9..03e2a56 100644
+--- a/src/backend.cpp
++++ b/src/backend.cpp
+@@ -6,7 +6,6 @@
+ #include "ggml.h"
+ #include "ggml-alloc.h"
+ #include "ggml-backend.h"
+-#include "ggml-cpu.h"
+ 
+ #include <cassert>
+ #include <cctype>
+@@ -45,6 +44,45 @@ struct PendingCapture {
+     ggml_tensor*        tensor;
+     std::vector<float>* dst;
+ };
++
++// CPU-backend access routed through the ggml device registry instead of the
++// CPU-module symbols (ggml_backend_cpu_init / _is_cpu / _set_n_threads). Under
++// GGML_BACKEND_DL the CPU backend is a dlopen'd module, so its symbols are NOT
++// resolvable at link time (MSVC rejects this with LNK2019); the registry API
++// (in ggml-base, always linked) is. The registry is populated for BOTH the
++// static build (GGML_USE_CPU registers the CPU device at startup) and the DL
++// build (global_backend() runs ggml_backend_load_all before any Backend is
++// constructed), so this single path works for both — no #ifdef needed.
++
++// Create a CPU backend via the registry: look up the CPU device, then init it.
++// Returns nullptr if no CPU device is registered.
++ggml_backend_t cpu_backend_init() {
++    ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
++    return dev ? ggml_backend_dev_init(dev, nullptr) : nullptr;
++}
++
++// True if `backend` is a CPU-type device (registry replacement for
++// ggml_backend_is_cpu).
++bool backend_is_cpu(ggml_backend_t backend) {
++    if (!backend) return false;
++    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
++    return dev && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
++}
++
++// Set the thread count on a CPU backend without linking the CPU-module symbol:
++// fetch ggml_backend_set_n_threads from the backend's registry entry via
++// proc-address (the standard ggml way for dynamically-loaded backends — this is
++// exactly what llama.cpp does). No-op if the backend/device/reg/proc is absent.
++void backend_set_n_threads(ggml_backend_t backend, int n_threads) {
++    if (!backend) return;
++    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
++    if (!dev) return;
++    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
++    if (!reg) return;
++    auto fn = (ggml_backend_set_n_threads_t)ggml_backend_reg_get_proc_address(
++        reg, "ggml_backend_set_n_threads");
++    if (fn) fn(backend, n_threads);
++}
+ } // namespace
+ 
+ struct Backend::Impl {
+@@ -124,7 +162,7 @@ Backend::Backend(int n_threads) : impl_(new Impl()) {
+                    want.c_str());
+     }
+     if (!impl_->backend) {              // CPU fallback (or CPU-only build)
+-        impl_->backend = ggml_backend_cpu_init();
++        impl_->backend = cpu_backend_init();
+         device_name_ = "cpu";
+     }
+     if (!impl_->backend) {
+@@ -136,7 +174,7 @@ Backend::Backend(int n_threads) : impl_(new Impl()) {
+     // instead of aborting. The CPU/single-backend path keeps using the persistent
+     // gallocr below and is untouched.
+     if (impl_->use_sched) {
+-        impl_->cpu_backend = ggml_backend_cpu_init();
++        impl_->cpu_backend = cpu_backend_init();
+         if (!impl_->cpu_backend) {
+             PK_LOG("pk::Backend: CPU fallback init failed; disabling sched");
+             impl_->use_sched = false;
+@@ -159,11 +197,11 @@ Backend::~Backend() {
+ 
+ void Backend::set_n_threads(int n_threads) {
+     n_threads_ = n_threads > 0 ? n_threads : 1;
+-    if (impl_ && impl_->backend && ggml_backend_is_cpu(impl_->backend)) {
+-        ggml_backend_cpu_set_n_threads(impl_->backend, n_threads_);
++    if (impl_ && impl_->backend && backend_is_cpu(impl_->backend)) {
++        backend_set_n_threads(impl_->backend, n_threads_);
+     }
+     if (impl_ && impl_->cpu_backend) {
+-        ggml_backend_cpu_set_n_threads(impl_->cpu_backend, n_threads_);
++        backend_set_n_threads(impl_->cpu_backend, n_threads_);
+     }
+ }
+ 
 diff --git a/src/ggml_graph.cpp b/src/ggml_graph.cpp
 index f5bf84a..6b9b45c 100644
 --- a/src/ggml_graph.cpp
@@ -94,6 +185,53 @@ index f5bf84a..6b9b45c 100644
      // Lazy create (reset-safe: shutdown_backend() can free it, and a later call
      // recreates it). Always reached under g_backend_mutex (run_graph holds it)
      // or before any inference thread exists, so a plain null-check is sufficient.
+diff --git a/src/model_loader.cpp b/src/model_loader.cpp
+index a1a0d66..b138216 100644
+--- a/src/model_loader.cpp
++++ b/src/model_loader.cpp
+@@ -3,8 +3,8 @@
+ #include "ggml.h"
+ #include "ggml-backend.h"
+ #include "ggml-alloc.h"
+-#include "ggml-cpu.h"
+ #include "gguf.h"
++#include <cstdint>
+ #include <cstring>
+ #include <vector>
+ #include <utility>
+@@ -73,18 +73,25 @@ bool ModelLoader::realize_weights(ggml_backend_t backend){
+     if(weights_buf_) return true;                       // idempotent
+     if(!backend || !ctx_){ PK_LOG("realize_weights: null backend/ctx"); return false; }
+ 
+-    if (ggml_backend_is_cpu(backend)) {
++    // CPU access is routed through the ggml device registry rather than the
++    // CPU-module symbols (ggml_backend_is_cpu / ggml_backend_cpu_buffer_from_ptr),
++    // so this links under GGML_BACKEND_DL (CPU is a dlopen'd module whose symbols
++    // are not available at link time) as well as in the static build. The CPU
++    // device's buffer_from_host_ptr maps to ggml_backend_cpu_buffer_from_ptr, so
++    // the zero-copy semantics below are unchanged.
++    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
++    if (dev && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+         // Fast path: borrow the host ctx memory directly (no copy).
+         // The GGUF is loaded with no_alloc=false, so every tensor's data lives
+         // in one contiguous ctx mem_buffer. Wrap that exact memory as a CPU
+-        // backend buffer (zero-copy: ggml_backend_cpu_buffer_from_ptr borrows
+-        // the ptr) and point every tensor's ->buffer at it, so graphs can
+-        // reference the loader tensors DIRECTLY as leaves (the gallocr treats
+-        // data!=NULL tensors as already-allocated and never copies them;
+-        // reshapes/views resolve at build time). Eliminates per-call recopy.
++        // backend buffer (zero-copy: buffer_from_host_ptr borrows the ptr) and
++        // point every tensor's ->buffer at it, so graphs can reference the loader
++        // tensors DIRECTLY as leaves (the gallocr treats data!=NULL tensors as
++        // already-allocated and never copies them; reshapes/views resolve at
++        // build time). Eliminates per-call recopy.
+         void*  base = ggml_get_mem_buffer(ctx_);
+         size_t size = ggml_get_mem_size(ctx_);
+-        weights_buf_ = ggml_backend_cpu_buffer_from_ptr(base, size);
++        weights_buf_ = ggml_backend_dev_buffer_from_host_ptr(dev, base, size, SIZE_MAX);
+         if(!weights_buf_){ PK_LOG("realize_weights: buffer_from_ptr failed"); return false; }
+         for(auto& kv : tensors_) kv.second->buffer = weights_buf_;
+         return true;
 diff --git a/src/parakeet_capi.cpp b/src/parakeet_capi.cpp
 index 01de213..1ddc2f0 100644
 --- a/src/parakeet_capi.cpp
