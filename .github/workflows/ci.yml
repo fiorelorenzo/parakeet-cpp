@@ -39,11 +39,14 @@ jobs:
           - os: ubuntu-latest
             kind: dl
             features: "--features dynamic-backends,vulkan"
-          # NOTE: Windows DL is intentionally NOT built yet. MSVC cannot defer the
-          # direct ggml_backend_cpu_init/_set_n_threads symbol references at DLL link
-          # time (no `-undefined dynamic_lookup` equivalent → LNK2019). A follow-up
-          # parakeet patch must route CPU-backend access through the ggml registry
-          # before Windows DL can link. Windows is not functional yet anyway.
+          # Windows: DL + Vulkan. The parakeet patch routes all CPU-backend access
+          # through the ggml device registry (no direct ggml_backend_cpu_* symbol
+          # references), so the shared parakeet/ggml core links cleanly under MSVC —
+          # no `-undefined dynamic_lookup` equivalent needed. The CPU + Vulkan
+          # backends ship as loadable modules, dlopen'd at runtime.
+          - os: windows-latest
+            kind: dl
+            features: "--features dynamic-backends,vulkan"
     env:
       # Pin a known-good LunarG SDK version for Windows (see llama.cpp CI).
       VULKAN_VERSION: "1.4.313.2"
