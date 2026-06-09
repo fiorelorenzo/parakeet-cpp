@@ -20,6 +20,12 @@ fn main() {
     apply_patches(&parakeet_patches_dir, &upstream);
     let ggml_patches_dir = upstream.join("third_party/ggml-patches");
     apply_patches(&ggml_patches_dir, &ggml);
+    // Our own (repo-tracked) ggml patches, applied to the ggml submodule root.
+    // The upstream `ggml-patches` above live INSIDE the parakeet.cpp submodule
+    // (not tracked by this repo); patches that must survive a clean checkout /
+    // CI / `git submodule update` belong here instead.
+    let our_ggml_patches_dir = manifest.join("patches/ggml");
+    apply_patches(&our_ggml_patches_dir, &ggml);
 
     // Dynamic-backends mode (the `dynamic-backends` feature): ggml builds each
     // backend (CPU variants + GPU) as a loadable MODULE that is dlopen'd at
@@ -227,6 +233,7 @@ fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=patches/parakeet");
+    println!("cargo:rerun-if-changed=patches/ggml");
     println!("cargo:rerun-if-changed=../vendor/parakeet.cpp/include/parakeet_capi.h");
     println!("cargo:rerun-if-changed=../vendor/parakeet.cpp/CMakeLists.txt");
 }

@@ -14,5 +14,13 @@ fn main() {
             }
         }
     }
+    // Surface the sys crate's loadable-backend-modules dir to this crate's own
+    // source/tests at compile time. cargo exposes the sys crate's `backends_dir`
+    // metadata key only to build scripts (as `DEP_PARAKEET_BACKENDS_DIR`), not to
+    // Rust code, so re-emit it as a compile-time env the DL integration test can
+    // read with `env!("PARAKEET_DL_BACKENDS_DIR")`. Absent on the static build.
+    if let Ok(dir) = std::env::var("DEP_PARAKEET_BACKENDS_DIR") {
+        println!("cargo:rustc-env=PARAKEET_DL_BACKENDS_DIR={dir}");
+    }
     println!("cargo:rerun-if-changed=build.rs");
 }
