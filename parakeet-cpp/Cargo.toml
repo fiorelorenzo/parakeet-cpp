@@ -17,6 +17,7 @@ metal = ["parakeet-cpp-sys/metal"]
 vulkan = ["parakeet-cpp-sys/vulkan"]
 cuda = ["parakeet-cpp-sys/cuda"]
 hip = ["parakeet-cpp-sys/hip"]
+dynamic-backends = ["parakeet-cpp-sys/dynamic-backends"]
 
 [dev-dependencies]
 hound = "3"
