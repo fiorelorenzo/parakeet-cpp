@@ -1,0 +1,34 @@
+dl-backends: load backend modules with RTLD_GLOBAL (Unix)
+
+Under GGML_BACKEND_DL the backends (CPU variants + Metal/CUDA/Vulkan/...) ship
+as loadable modules that ggml dlopen's at runtime. parakeet.cpp's backend.cpp
+calls a handful of CPU-backend symbols DIRECTLY at link time
+(ggml_backend_cpu_init / ggml_backend_cpu_set_n_threads / ggml_backend_is_cpu /
+ggml_backend_cpu_buffer_from_ptr) to build the CPU fallback that the scheduler
+uses for ops the GPU backend lacks. Those symbols live ONLY in the dlopen'd CPU
+module, not in the shared core, so the shared parakeet/final binary links them
+as undefined (resolved via -Wl,-undefined,dynamic_lookup).
+
+ggml's default dlopen uses RTLD_LOCAL, which keeps a module's symbols out of the
+global flat-namespace pool, so those dynamic_lookup references never resolve and
+the first call jumps to address 0 -> SIGSEGV (observed on macOS during the very
+first Backend construction on the Metal path). Loading with RTLD_GLOBAL promotes
+each backend module's exported symbols into the global namespace so the
+dynamic_lookup references in libparakeet bind to the real CPU-module functions.
+
+Windows (the _WIN32 branch above) is unaffected: GetProcAddress already resolves
+from the loaded module, and the loader finds the DLLs via the link-search/PATH.
+
+diff --git a/src/ggml-backend-dl.cpp b/src/ggml-backend-dl.cpp
+index a65cf009..69ef4b02 100644
+--- a/src/ggml-backend-dl.cpp
++++ b/src/ggml-backend-dl.cpp
+@@ -32,7 +32,7 @@ const char * dl_error() {
+ #else
+
+ dl_handle * dl_load_library(const fs::path & path) {
+-    dl_handle * handle = dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
++    dl_handle * handle = dlopen(path.string().c_str(), RTLD_NOW | RTLD_GLOBAL);
+     return handle;
+ }
+

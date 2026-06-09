@@ -56,6 +56,26 @@ impl Model {
         self.streaming
     }
 
+    /// Name of the compute device the (process-global) ggml backend resolved to:
+    /// `"cpu"` for the CPU backend, or the device name of the selected GPU
+    /// backend (e.g. `"Metal"`, `"CUDA0"`, `"Vulkan0"`). Under the
+    /// `dynamic-backends` feature this reflects which loadable backend module was
+    /// dlopen'd and selected. The backend is created lazily on first model load /
+    /// transcribe; calling this forces and returns the resolved name. Returns an
+    /// empty string if the C getter yields NULL.
+    #[must_use]
+    pub fn backend_name(&self) -> String {
+        // SAFETY: `self.ctx` is non-null for the lifetime of `Model` (set in
+        // `load`, cleared only in `Drop`). The returned pointer is owned by the
+        // process-global backend and stays valid for the process lifetime — we
+        // copy it into an owned String and must NOT free it (unlike take_string).
+        let p = unsafe { sys::parakeet_capi_backend_name(self.ctx) };
+        if p.is_null() {
+            return String::new();
+        }
+        unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
+    }
+
     /// Offline one-shot transcription of 16 kHz mono f32 PCM.
     pub fn transcribe(
         &mut self,

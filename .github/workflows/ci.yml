@@ -8,22 +8,42 @@ on:
 
 jobs:
   build:
-    name: build-${{ matrix.os }}
+    name: build-${{ matrix.os }}-${{ matrix.kind }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # --- static link (default) ---
           # macOS: Metal backend is auto-enabled by build.rs on target_os=macos.
           - os: macos-latest
+            kind: static
             features: ""
           # Linux + Windows: GPU support via the Vulkan backend (ggml-vulkan).
           # Compile-only here (GPU-less runners) — shaders are compiled to SPIR-V
           # via glslc at build time; no VkInstance is created.
           - os: ubuntu-latest
+            kind: static
             features: "--features vulkan"
           - os: windows-latest
+            kind: static
             features: "--features vulkan"
+          # --- dynamic backends (GGML_BACKEND_DL): backends as loadable modules ---
+          # macOS: Metal still auto-on, built as a module.
+          - os: macos-latest
+            kind: dl
+            features: "--features dynamic-backends"
+          # Linux: DL + Vulkan so the Vulkan backend is built as a module. parakeet
+          # calls ggml-cpu symbols directly; GNU ld defers them in the shared object
+          # and the RTLD_GLOBAL ggml patch resolves them at load.
+          - os: ubuntu-latest
+            kind: dl
+            features: "--features dynamic-backends,vulkan"
+          # NOTE: Windows DL is intentionally NOT built yet. MSVC cannot defer the
+          # direct ggml_backend_cpu_init/_set_n_threads symbol references at DLL link
+          # time (no `-undefined dynamic_lookup` equivalent → LNK2019). A follow-up
+          # parakeet patch must route CPU-backend access through the ggml registry
+          # before Windows DL can link. Windows is not functional yet anyway.
     env:
       # Pin a known-good LunarG SDK version for Windows (see llama.cpp CI).
       VULKAN_VERSION: "1.4.313.2"

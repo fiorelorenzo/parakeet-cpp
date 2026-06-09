@@ -21,3 +21,6 @@ metal = []
 vulkan = []
 cuda = []
 hip = []
+# Build ggml backends as loadable modules (dlopen'd at runtime) and link the
+# shared core instead of a fully static binary. See build.rs `dl` branch.
+dynamic-backends = []

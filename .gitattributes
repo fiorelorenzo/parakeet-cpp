@@ -1,0 +1,4 @@
+# Patch files must stay LF on every platform. Without this, Windows checkouts
+# (autocrlf) convert them to CRLF, which `git apply` cannot parse/apply
+# ("patch does not apply"). The build.rs applies these to the vendored source.
+*.patch text eol=lf

@@ -1,0 +1,126 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index da2dfb8..4d84c3d 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -14,16 +14,32 @@ option(PARAKEET_GGML_CUDA   "Forward GGML_CUDA" OFF)
+ option(PARAKEET_GGML_METAL  "Forward GGML_METAL" OFF)
+ option(PARAKEET_GGML_VULKAN "Forward GGML_VULKAN" OFF)
+ option(PARAKEET_GGML_HIP "Forward GGML_HIP (ROCm)" OFF)
++option(PARAKEET_GGML_BACKEND_DL "Build ggml backends as loadable modules" OFF)
+ 
+ set(GGML_CUDA    ${PARAKEET_GGML_CUDA}   CACHE BOOL "" FORCE)
+ set(GGML_METAL   ${PARAKEET_GGML_METAL}  CACHE BOOL "" FORCE)
+ set(GGML_VULKAN  ${PARAKEET_GGML_VULKAN} CACHE BOOL "" FORCE)
+ set(GGML_HIP ${PARAKEET_GGML_HIP} CACHE BOOL "" FORCE)
+ 
++# Dynamic backend loading: ggml builds each backend (CPU variants + GPU) as a
++# separate loadable module that ggml_backend_load_all[_from_path] dlopens at
++# runtime, so the app can ship CPU-only and pick up a GPU backend module when
++# present. DL implies shared libs, and the CPU backend must be built as ALL
++# portable variants (no -march=native baked in) so it runs on any CPU; native
++# tuning is selected per-variant at load time instead. See the load_all call in
++# src/ggml_graph.cpp.
++if(PARAKEET_GGML_BACKEND_DL)
++  set(GGML_BACKEND_DL      ON CACHE BOOL "" FORCE)
++  set(BUILD_SHARED_LIBS    ON CACHE BOOL "" FORCE)
++  set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
++endif()
++
+ # Performance: -march=native (GGML_NATIVE) and tinyBLAS SGEMM (GGML_LLAMAFILE)
+ # give meaningful free speedups (~30% and ~25% per the rt-detr.cpp benchmarks).
+-# Force them on unless the caller explicitly overrides.
+-if(NOT DEFINED GGML_NATIVE)
++# Force them on unless the caller explicitly overrides. DO NOT force GGML_NATIVE
++# in the DL case: a DL build must be portable (GGML_CPU_ALL_VARIANTS handles
++# per-CPU dispatch), so -march=native would defeat the point.
++if(NOT DEFINED GGML_NATIVE AND NOT PARAKEET_GGML_BACKEND_DL)
+   set(GGML_NATIVE ON CACHE BOOL "ggml: optimize the build for the current system" FORCE)
+ endif()
+ if(NOT DEFINED GGML_LLAMAFILE)
+diff --git a/include/parakeet_capi.h b/include/parakeet_capi.h
+index b082455..de21cd2 100644
+--- a/include/parakeet_capi.h
++++ b/include/parakeet_capi.h
+@@ -221,6 +221,16 @@ void parakeet_capi_free_string(char* s);
+ // it (or until parakeet_capi_free). Returns "" if `ctx` is NULL.
+ const char* parakeet_capi_last_error(parakeet_ctx* ctx);
+ 
++// Name of the compute device the (process-global) backend resolved to: "cpu"
++// for the CPU backend, or the ggml registry device name for a GPU backend (e.g.
++// "Metal", "CUDA0", "Vulkan0"). Under GGML_BACKEND_DL this reflects which
++// loadable backend module was selected after ggml_backend_load_all. The backend
++// is created lazily on first model load; if no model has been loaded yet on this
++// `ctx` (so the backend may not exist) the call still forces/returns the
++// resolved name. The returned pointer is owned by the backend and stays valid
++// for the process lifetime; do NOT free it. Returns "" if `ctx` is NULL.
++const char* parakeet_capi_backend_name(parakeet_ctx* ctx);
++
+ #ifdef __cplusplus
+ } // extern "C"
+ #endif
+diff --git a/src/ggml_graph.cpp b/src/ggml_graph.cpp
+index f5bf84a..6b9b45c 100644
+--- a/src/ggml_graph.cpp
++++ b/src/ggml_graph.cpp
+@@ -2,7 +2,9 @@
+ #include "backend.hpp"
+ #include "common.hpp"
+ #include "ggml.h"
++#include "ggml-backend.h"
+ #include <atomic>
++#include <cstdlib>
+ #include <memory>
+ #include <mutex>
+ 
+@@ -47,6 +49,21 @@ std::mutex g_backend_mutex;
+ constexpr int kDefaultThreads = 8;
+ 
+ Backend& global_backend() {
++    // Under GGML_BACKEND_DL the GPU backends (Metal/Vulkan/CUDA/...) ship as
++    // separate loadable modules that are NOT in the device registry until they
++    // are dlopen'd. The Backend ctor walks that registry to pick a device, so the
++    // modules MUST be loaded before the FIRST Backend is constructed (here) or it
++    // would only ever see CPU. Run exactly once, process-wide, regardless of the
++    // entry point (C API, CLI, tests). PARAKEET_BACKENDS_DIR overrides the search
++    // dir (where the .so/.dylib/.dll backend modules live); unset = default search
++    // (next to the executable, then the system paths ggml probes). A no-op for a
++    // statically-linked (non-DL) build: the registry is already populated.
++    static std::once_flag s_load_backends_once;
++    std::call_once(s_load_backends_once, [] {
++        const char* dir = std::getenv("PARAKEET_BACKENDS_DIR");
++        if (dir && *dir) ggml_backend_load_all_from_path(dir);
++        else             ggml_backend_load_all();
++    });
+     // Lazy create (reset-safe: shutdown_backend() can free it, and a later call
+     // recreates it). Always reached under g_backend_mutex (run_graph holds it)
+     // or before any inference thread exists, so a plain null-check is sufficient.
+diff --git a/src/parakeet_capi.cpp b/src/parakeet_capi.cpp
+index 01de213..1ddc2f0 100644
+--- a/src/parakeet_capi.cpp
++++ b/src/parakeet_capi.cpp
+@@ -3,6 +3,8 @@
+ #include "model.hpp"      // pk::Model
+ #include "streaming.hpp"  // pk::StreamingSession
+ #include "mel.hpp"        // pk::MelFrontend
++#include "ggml_graph.hpp" // pk::global_backend()
++#include "backend.hpp"    // pk::Backend::device_name()
+ 
+ #include "transcription.hpp"  // pk::Transcription, pk::Word
+ 
+@@ -693,3 +695,16 @@ extern "C" const char* parakeet_capi_last_error(parakeet_ctx* ctx) {
+     if (!ctx) return "";
+     return ctx->last_error.c_str();
+ }
++
++extern "C" const char* parakeet_capi_backend_name(parakeet_ctx* ctx) {
++    if (!ctx) return "";
++    // The backend is process-global (pk::global_backend()), not per-ctx; `ctx` is
++    // taken for API symmetry and the NULL guard. device_name() returns a pointer
++    // owned by the backend, valid for the process lifetime.
++    try {
++        return pk::global_backend().device_name();
++    } catch (...) {
++        ctx->last_error = "failed to resolve backend";
++        return "";
++    }
++}
