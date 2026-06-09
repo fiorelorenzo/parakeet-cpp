@@ -4,9 +4,9 @@ use std::process::Command;
 
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let upstream = manifest
-        .join("../vendor/parakeet.cpp")
-        .canonicalize()
+    // dunce::canonicalize avoids the Windows `\\?\` verbatim-path prefix that
+    // breaks `git apply` (and some cmake paths); on Unix it matches canonicalize.
+    let upstream = dunce::canonicalize(manifest.join("../vendor/parakeet.cpp"))
         .expect("vendor/parakeet.cpp not found — run: git submodule update --init --recursive");
     let ggml = upstream.join("third_party/ggml");
 
@@ -69,7 +69,14 @@ fn main() {
     // Static libs to link, in dependency order (parakeet depends on ggml).
     // Verified against vendor pin e270af7 (ggml e705c5fe). Revisit on submodule bump:
     // ggml has split/renamed backend libs across versions.
-    let lib_dirs = [dst.join("lib"), dst.join("build")];
+    // Search the install dir (`lib/`) + the build tree (`build/`), plus the
+    // `Release/` subdirs that Windows multi-config (MSVC/VS) generators produce.
+    let lib_dirs = [
+        dst.join("lib"),
+        dst.join("build"),
+        dst.join("lib").join("Release"),
+        dst.join("build").join("Release"),
+    ];
     for dir in &lib_dirs {
         println!("cargo:rustc-link-search=native={}", dir.display());
     }
@@ -85,14 +92,38 @@ fn main() {
         "ggml-hip",
     ];
     for lib in candidates {
-        let exists = lib_dirs
-            .iter()
-            .any(|d| d.join(format!("lib{lib}.a")).exists());
-        if exists {
+        // Unix: `lib<name>.a`; Windows MSVC: `<name>.lib`.
+        let found = lib_dirs.iter().any(|d| {
+            d.join(format!("lib{lib}.a")).exists() || d.join(format!("{lib}.lib")).exists()
+        });
+        if found {
             println!("cargo:rustc-link-lib=static={lib}");
         }
     }
-    println!("cargo:rustc-link-lib=c++");
+
+    // C++ standard library: libc++ on macOS (clang), libstdc++ on Linux (gcc).
+    // MSVC links its C++ runtime automatically, so emit nothing on Windows.
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    match target_os.as_str() {
+        "macos" => println!("cargo:rustc-link-lib=c++"),
+        "linux" => println!("cargo:rustc-link-lib=stdc++"),
+        _ => {}
+    }
+
+    // Vulkan loader, required when the ggml-vulkan backend is statically linked.
+    if cfg!(feature = "vulkan") {
+        match target_os.as_str() {
+            "linux" => println!("cargo:rustc-link-lib=vulkan"),
+            "windows" => {
+                if let Ok(sdk) = env::var("VULKAN_SDK") {
+                    println!("cargo:rustc-link-search=native={sdk}/Lib");
+                }
+                println!("cargo:rustc-link-lib=vulkan-1");
+            }
+            _ => {}
+        }
+    }
+
     if cfg!(target_os = "macos") {
         for fw in [
             "Metal",

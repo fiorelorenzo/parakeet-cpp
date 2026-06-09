@@ -11,6 +11,9 @@ categories = ["external-ffi-bindings"]
 [build-dependencies]
 cmake = "0.1"
 bindgen = "0.70"
+# Clean Windows path canonicalization (no `\\?\` verbatim prefix) so `git apply`
+# and cmake accept the vendored-source paths.
+dunce = "1"
 
 [features]
 default = []
