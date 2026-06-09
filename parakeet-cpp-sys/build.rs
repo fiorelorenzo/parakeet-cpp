@@ -147,6 +147,11 @@ fn main() {
             println!("cargo:rustc-link-lib=framework={fw}");
         }
     }
+    if cfg!(target_os = "windows") {
+        // ggml-cpu reads the Windows registry (CPU feature detection) →
+        // RegOpenKeyExA / RegQueryValueExA / RegCloseKey live in advapi32.
+        println!("cargo:rustc-link-lib=advapi32");
+    }
 
     let include = upstream.join("include");
     let bindings = bindgen::Builder::default()
