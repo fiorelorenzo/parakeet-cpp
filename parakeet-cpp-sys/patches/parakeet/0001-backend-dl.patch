@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index da2dfb8..4d84c3d 100644
+index da2dfb8..a98c6d7 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -14,16 +14,32 @@ option(PARAKEET_GGML_CUDA   "Forward GGML_CUDA" OFF)
@@ -37,6 +37,21 @@ index da2dfb8..4d84c3d 100644
    set(GGML_NATIVE ON CACHE BOOL "ggml: optimize the build for the current system" FORCE)
  endif()
  if(NOT DEFINED GGML_LLAMAFILE)
+@@ -84,6 +100,14 @@ set(PARAKEET_SRC
+ 
+ if(PARAKEET_SHARED)
+   add_library(parakeet SHARED ${PARAKEET_SRC})
++  # The C API (parakeet_capi_*) is plain `extern "C"` with no
++  # __declspec(dllexport) / GGML_API-style macro, so on Windows the SHARED
++  # parakeet.dll would export nothing and MSVC would emit NO import library
++  # (parakeet.lib) — the consumer link then fails with
++  # `LNK1181: cannot open input file 'parakeet.lib'`. Auto-export all symbols so
++  # the import lib is produced (CMake generates a .def of every public symbol).
++  # No-op on ELF/Mach-O, which export by default.
++  set_target_properties(parakeet PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+ else()
+   add_library(parakeet STATIC ${PARAKEET_SRC})
+ endif()
 diff --git a/include/parakeet_capi.h b/include/parakeet_capi.h
 index b082455..de21cd2 100644
 --- a/include/parakeet_capi.h
