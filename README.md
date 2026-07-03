@@ -1,5 +1,7 @@
 # parakeet-cpp
 
+[![ci](https://github.com/fiorelorenzo/parakeet-cpp/actions/workflows/ci.yml/badge.svg)](https://github.com/fiorelorenzo/parakeet-cpp/actions/workflows/ci.yml)
+
 Safe Rust bindings for [mudler/parakeet.cpp](https://github.com/mudler/parakeet.cpp) — a
 ggml-based C++ port of NVIDIA's Parakeet and Nemotron ASR models. Provides offline
 one-shot transcription and two streaming modes (real cache-aware streaming and
