@@ -1,0 +1,42 @@
+{
+  "base": "origin/main",
+  "jobs": 4,
+  "checks": [
+    {
+      "id": "fmt",
+      "run": "cargo fmt --all --check",
+      "when": ["parakeet-cpp/**/*.rs", "parakeet-cpp-sys/**/*.rs"],
+      "why": "rustfmt --check, OS-independent so there is nothing platform-specific to prove here. macOS and Windows compile coverage lives only in build-macos-latest-*/build-windows-latest-* on push:main, same as every other check below."
+    },
+    {
+      "id": "clippy",
+      "run": "cargo clippy --workspace --all-targets -- -D warnings",
+      "when": [
+        "parakeet-cpp/**",
+        "parakeet-cpp-sys/**",
+        "vendor/parakeet.cpp",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml"
+      ],
+      "why": "clippy lints compiled code, so parakeet-cpp-sys/build.rs compiles the vendored ggml/parakeet.cpp via cmake as a side effect (CPU-only, ~25s on this box) before the lint runs. That only proves the Linux leg: this box has neither Xcode/Metal nor MSVC, so macOS and Windows compile coverage stays exclusively on push:main (build-macos-latest-*, build-windows-latest-* in ci.yml) — nothing here fakes that coverage.",
+      "serial": true,
+      "lock": "cargo-build"
+    },
+    {
+      "id": "test-linux",
+      "run": "cargo build --release -p parakeet-cpp --features vulkan && cargo test --release -p parakeet-cpp -p parakeet-cpp-sys --features vulkan",
+      "when": [
+        "parakeet-cpp/**",
+        "parakeet-cpp-sys/**",
+        "vendor/parakeet.cpp",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml"
+      ],
+      "why": "mirrors build-ubuntu-latest-static: a release build with the Vulkan backend (compile-only on this GPU-less box — shaders compile to SPIR-V via glslc, no VkInstance is ever created) plus the non-gated test suite (model-dependent integration tests skip without PARAKEET_TEST_* env). macOS and Windows builds, and the dynamic-backends (GGML_BACKEND_DL) legs, are not reproducible on this Linux box and stay push:main-only (build-macos-latest-*, build-macos-latest-dl, build-ubuntu-latest-dl, build-windows-latest-static, build-windows-latest-dl in ci.yml).",
+      "serial": true,
+      "lock": "cargo-build"
+    }
+  ]
+}

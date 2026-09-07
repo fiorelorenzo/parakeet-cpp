@@ -6,10 +6,36 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Cancel a superseded run on the same ref: a force-push, or a second push
+# while the trunk matrix is still running, only needs the latest commit
+# checked.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
+  # Tier 2: the PR-path gate. rustfmt + clippy already need a full `cargo
+  # build` of the workspace (clippy lints compiled code, and the sys crate's
+  # build.rs compiles the vendored ggml/parakeet.cpp via cmake), so this one
+  # job is also the cheapest check that proves the crate still builds on
+  # Linux — measured 66s wall clock on this repo's own PR runner (run
+  # 32013104850, job "lint (rustfmt + clippy)"), against 3m34s-6m54s for the
+  # six-leg OS matrix below. Adding the Linux leg of that matrix on top would
+  # have pushed the PR gate past the two-minute budget the three-tier model
+  # asks for (build-ubuntu-latest-static alone measured 3m34s), so it stays
+  # trunk-only; `preflight`'s own build+test check
+  # (.github/preflight.json) covers the same ground locally before the push.
+  #
+  # Runs on every event (push and workflow_dispatch too, not gated by
+  # `if:`): unlike the matrix, one Linux clippy build costs nothing extra on
+  # push, and a regression here should fail loud on main as well.
   lint:
     name: lint (rustfmt + clippy)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout (with vendored parakeet.cpp + ggml submodules)
         uses: actions/checkout@v4
@@ -30,9 +56,17 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # Tier 3: main-only (and workflow_dispatch), the full six-leg matrix. None
+  # of this is a PR author's problem before merge: `lint` above already
+  # proves the crate builds and lints clean on Linux, and macOS/Windows only
+  # exist as hosted runners — `preflight` cannot build either locally, so
+  # push:main is the only place they are exercised at all (see
+  # .github/preflight.json's `why` on the build-linux check).
   build:
     name: build-${{ matrix.os }}-${{ matrix.kind }}
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -123,3 +157,23 @@ jobs:
       # tests skip without PARAKEET_TEST_* env, so this is GPU-less safe.
       - name: Cargo test
         run: cargo test --release -p parakeet-cpp -p parakeet-cpp-sys ${{ matrix.features }}
+
+  # The single required status check. Never rename it: it is the one context
+  # in the branch ruleset, so the jobs above can be renamed, split, or moved
+  # between tiers forever without a ruleset edit. `skipped` counts as
+  # passing — that is what makes a PR-path run, where `build` skips by
+  # design, come out green.
+  ci:
+    name: ci
+    if: always()
+    needs: [lint, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: A needed job failed or was cancelled
+        run: |
+          printf '%s\n' '${{ toJSON(needs) }}'
+          printf '%s' '${{ toJSON(needs) }}' | jq -e '
+            to_entries
+            | map(select(.value.result == "failure" or .value.result == "cancelled"))
+            | length == 0'
