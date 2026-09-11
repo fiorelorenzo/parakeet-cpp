@@ -123,3 +123,26 @@ jobs:
       # tests skip without PARAKEET_TEST_* env, so this is GPU-less safe.
       - name: Cargo test
         run: cargo test --release -p parakeet-cpp -p parakeet-cpp-sys ${{ matrix.features }}
+
+  # The aggregate context, and the only one the branch ruleset requires. It exists
+  # because a required check has to be a status that reports on every PR: naming
+  # `lint (rustfmt + clippy)` or one `build-<os>-<kind>` cell would tie the trunk to a
+  # matrix leg, and naming a context no job produces is what blocked PR #6 with
+  # `Required status check "ci" is expected.` while all seven real checks were green.
+  #
+  # `if: always()` so it reports even when a dependency was skipped, and the step fails
+  # only on a real failure or cancellation, which is the same shape the other repos use.
+  ci:
+    name: ci
+    needs: [lint, build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail if any job failed or was cancelled
+        run: |
+          echo "lint: ${{ needs.lint.result }}"
+          echo "build: ${{ needs.build.result }}"
+          if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            exit 1
+          fi
