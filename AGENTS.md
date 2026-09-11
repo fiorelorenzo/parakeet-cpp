@@ -50,3 +50,39 @@ the only allowed merge method). `delete_branch_on_merge` is on, so a merged bran
 is gone from the remote on its own — no manual cleanup. There is no linked GitHub
 Project, no milestones and no custom labels on this repo today: it does not use the
 board conventions the SvelteKit projects (canonry, mastro) use.
+
+## Pull requests
+
+One shape for every repo of mine: `skill://opening-a-pull-request`. The issue and its
+neighbours before the branch, the branch name Linear renders on the issue, Conventional
+Commits in the first person, the body's four sections from
+`.github/PULL_REQUEST_TEMPLATE.md` (Screenshots is never deleted), an independent review
+applied in a second commit, and the card closed only against evidence. What is true only
+here:
+
+- **Scopes** for the subject: the crate or surface a change actually touches, read from
+  the log rather than invented: `sys` (`parakeet-cpp-sys`: `build.rs`, the CMake
+  invocation, bindgen, bumping the `vendor/parakeet.cpp` pin), `wrapper` (`parakeet-cpp`:
+  the safe API, `Model`, `Error`), `stream` (`StreamSession` and its two
+  implementations), `spike` (the `spike` example and its harness), or a backend name
+  (`dl`, `windows`) when a change is specific to one. Leave the scope off for something
+  repo-wide (docs, CI, the workspace `Cargo.toml`) rather than force one on it.
+- **Required check**: the ruleset names `ci` as the sole required status check, but no
+  job in `.github/workflows/ci.yml` is actually named `ci` (its checks are
+  `lint (rustfmt + clippy)` and the six `build-<os>-<static|dl>` matrix cells): measured
+  on #6, where all seven passed and the merge stayed `BLOCKED` on `Required status check
+  "ci" is expected.` `bypass_actors` is empty, so this also blocks an admin merge, not
+  only an ordinary one. Every PR here is unmergeable through the UI or `gh` until either
+  the ruleset's context is corrected to a real check name or the workflow gains an
+  aggregate `ci` job the way `pitchbox` and `mastro` do; do not work around it with a
+  ruleset edit to force a merge through.
+- **Merge**: squash is the only allowed method (`allow_squash_merge` true, everything
+  else false) and `allow_auto_merge` is off, so watch checks by hand
+  (`gh pr checks <n> --watch`) and merge with `gh pr merge <n> --squash --delete-branch`.
+  `delete_branch_on_merge` is already on remotely; local `main` still needs
+  `git checkout main && git pull --ff-only` afterward.
+
+`vendor/parakeet.cpp` is upstream's own code, pulled in as a submodule and bumped by the
+procedure in `CONTRIBUTING.md`, never edited or reviewed here: this shape covers a
+change to this repo's own Rust, its build script, its CI or its docs, never a change
+inside that submodule.
